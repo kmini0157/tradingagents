@@ -153,6 +153,8 @@ DEFAULT_CONFIG = _apply_env_overrides({
         ".NS":  "^NSEI",       # NSE India (Nifty 50)
         ".BO":  "^BSESN",      # BSE India (Sensex)
         ".T":   "^N225",       # Tokyo (Nikkei 225)
+        ".KS":  "^KS11",       # Korea (KOSPI Composite)
+        ".KQ":  "^KQ11",       # Korea (KOSDAQ Composite)
         ".HK":  "^HSI",        # Hong Kong (Hang Seng)
         ".L":   "^FTSE",       # London (FTSE 100)
         ".TO":  "^GSPTSE",     # Toronto (TSX Composite)

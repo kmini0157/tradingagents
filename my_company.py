@@ -74,6 +74,20 @@ ANTHROPIC_API_KEY=
 """
 
 
+# 인증 실패로 보이는 예외를 식별하는 힌트 (제공자 SDK 종류와 무관하게 문자열로 판별).
+_AUTH_ERROR_HINTS = (
+    "authentication", "invalid api key", "invalid x-api-key", "invalid_api_key",
+    "incorrect api key", "unauthorized", "401",
+    "could not resolve authentication", "no api key",
+)
+
+
+def _looks_like_auth_error(exc: BaseException) -> bool:
+    """예외가 API 키/인증 문제로 보이면 True (프리플라이트를 통과한 '틀린 키' 케이스)."""
+    text = f"{type(exc).__name__} {exc}".lower()
+    return any(hint in text for hint in _AUTH_ERROR_HINTS)
+
+
 def _latest_business_day() -> str:
     """분석 기준일 기본값: 가장 최근 평일(주말이면 금요일로 back-off)."""
     d = date.today()
@@ -95,7 +109,10 @@ def build_config() -> dict:
         config["quick_think_llm"] = "claude-sonnet-5"
         config["anthropic_effort"] = "high"
 
-    # 리포트는 한국어로 (에이전트 내부 토론은 추론 품질을 위해 영어 유지)
+    # 출력 언어: 한국어. 프레임워크는 이 값을 최종 리포트뿐 아니라
+    # 애널리스트·강세/약세 리서처·리스크 토론(공격/중립/보수)·리서치
+    # 매니저·트레이더·포트폴리오 매니저까지 전 단계에 적용하므로,
+    # 파이프라인 산출물 전체가 한국어로 나온다.
     config["output_language"] = "Korean"
 
     # 공격형: 강세/약세 리서처 토론과 리스크팀(공격/중립/보수) 논쟁을
@@ -191,7 +208,16 @@ def main() -> None:
         config=config,
     )
 
-    _, decision = ta.propagate(ticker, trade_date)
+    try:
+        _, decision = ta.propagate(ticker, trade_date)
+    except Exception as exc:  # noqa: BLE001 — 인증 실패만 친절히 안내, 그 외는 그대로 전파
+        if _looks_like_auth_error(exc):
+            env_var = get_api_key_env(config["llm_provider"]) or "API 키"
+            print(f"\n⚠  {config['llm_provider']} 인증에 실패했습니다 — {env_var} 값이 올바른지 확인하세요.")
+            print(f"   .env 의 {env_var} 를 유효한 키로 바꾼 뒤 다시 실행: python my_company.py")
+            sys.exit(1)
+        raise
+
     print("\n===== 최종 결정 =====")
     print(decision)
 

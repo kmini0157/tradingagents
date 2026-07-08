@@ -55,6 +55,8 @@ class TestCliSkipsPromptsFromEnv(unittest.TestCase):
              mock.patch.object(m, "DEFAULT_CONFIG", fake_cfg), \
              mock.patch.object(m, "fetch_announcements", return_value=None), \
              mock.patch.object(m, "display_announcements"), \
+             mock.patch.object(m, "load_saved_settings", return_value=None), \
+             mock.patch.object(m, "save_settings"), \
              mock.patch.object(m, "get_ticker", return_value="AAPL"), \
              mock.patch.object(m, "get_analysis_date", return_value="2026-05-29"), \
              mock.patch.object(m, "select_analysts", return_value=[]), \
@@ -98,6 +100,8 @@ class TestResearchDepthSkippedFromEnv(unittest.TestCase):
              mock.patch.object(m, "DEFAULT_CONFIG", fake_cfg), \
              mock.patch.object(m, "fetch_announcements", return_value=None), \
              mock.patch.object(m, "display_announcements"), \
+             mock.patch.object(m, "load_saved_settings", return_value=None), \
+             mock.patch.object(m, "save_settings"), \
              mock.patch.object(m, "get_ticker", return_value="AAPL"), \
              mock.patch.object(m, "get_analysis_date", return_value="2026-05-29"), \
              mock.patch.object(m, "select_analysts", return_value=[]), \
@@ -128,6 +132,8 @@ class TestReasoningEffortSkippedFromEnv(unittest.TestCase):
              mock.patch.object(m, "DEFAULT_CONFIG", fake_cfg), \
              mock.patch.object(m, "fetch_announcements", return_value=None), \
              mock.patch.object(m, "display_announcements"), \
+             mock.patch.object(m, "load_saved_settings", return_value=None), \
+             mock.patch.object(m, "save_settings"), \
              mock.patch.object(m, "get_ticker", return_value="AAPL"), \
              mock.patch.object(m, "get_analysis_date", return_value="2026-05-29"), \
              mock.patch.object(m, "select_analysts", return_value=[]), \

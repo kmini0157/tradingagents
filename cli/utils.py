@@ -20,7 +20,63 @@ ANALYST_ORDER = [
     ("Fundamentals Analyst", AnalystType.FUNDAMENTALS),
 ]
 
+# Accepted spellings for the --analysts flag; "sentiment" matches the
+# user-facing label while "social" stays the wire value (cli/models.py).
+_ANALYST_ALIASES = {
+    "market": AnalystType.MARKET,
+    "social": AnalystType.SOCIAL,
+    "sentiment": AnalystType.SOCIAL,
+    "news": AnalystType.NEWS,
+    "fundamentals": AnalystType.FUNDAMENTALS,
+}
+
+# Research depth: the wizard's Shallow/Medium/Deep map to round counts.
+_DEPTH_ALIASES = {"shallow": 1, "medium": 3, "deep": 5}
+_DEPTH_LABELS = {1: "Shallow", 3: "Medium", 5: "Deep"}
+
 CRYPTO_SUFFIXES = ("-USD", "-USDT", "-USDC", "-BTC", "-ETH")
+
+
+def parse_analysts_option(value: str) -> list[AnalystType]:
+    """Parse a --analysts flag value ("all" or comma/space-separated names).
+
+    Raises ValueError with a user-facing message on unknown names.
+    """
+    normalized = value.replace(",", " ").split()
+    if not normalized:
+        raise ValueError("No analysts given. Use 'all' or names like market,news.")
+    if len(normalized) == 1 and normalized[0].lower() == "all":
+        return [analyst for _, analyst in ANALYST_ORDER]
+    selected: list[AnalystType] = []
+    for name in normalized:
+        analyst = _ANALYST_ALIASES.get(name.lower())
+        if analyst is None:
+            valid = ", ".join(sorted({*_ANALYST_ALIASES}))
+            raise ValueError(f"Unknown analyst {name!r}. Valid: all, {valid}.")
+        if analyst not in selected:
+            selected.append(analyst)
+    return selected
+
+
+def parse_depth_option(value: str) -> int:
+    """Parse a --depth flag value: 1/3/5 or shallow/medium/deep."""
+    alias = _DEPTH_ALIASES.get(value.strip().lower())
+    if alias is not None:
+        return alias
+    try:
+        depth = int(value)
+    except ValueError:
+        depth = -1
+    if depth in _DEPTH_LABELS:
+        return depth
+    raise ValueError(
+        f"Invalid research depth {value!r}. Use 1/3/5 or shallow/medium/deep."
+    )
+
+
+def depth_label(depth: int) -> str:
+    """Human label for a research-depth round count."""
+    return _DEPTH_LABELS.get(depth, str(depth))
 
 
 def is_valid_ticker_input(value: str) -> bool:
@@ -31,18 +87,23 @@ def is_valid_ticker_input(value: str) -> bool:
     allowed (it defaults to SPY downstream).
     """
     v = value.strip()
-    return not v or (all(ch.isalnum() or ch in "._-^=" for ch in v) and len(v) <= 32)
+    return not v or (
+        all(ch.isascii() and (ch.isalnum() or ch in "._-^=") for ch in v)
+        and len(v) <= 32
+    )
 
 
-def get_ticker() -> str:
+def get_ticker(default: str | None = None) -> str:
     """Prompt the user to enter a ticker symbol, preserving exchange suffixes.
 
     Uses questionary.text (not typer.prompt, which strips trailing dot-suffixes
     like ``000404.SH`` on some shells) and validates the symbol charset so an
-    obvious typo is caught before the run starts.
+    obvious typo is caught before the run starts. ``default`` (typically the
+    last-used ticker) is what an empty entry falls back to; SPY otherwise.
     """
+    fallback = (default or "SPY").strip().upper()
     ticker = questionary.text(
-        f"Enter ticker symbol (e.g. {TICKER_INPUT_EXAMPLES}):",
+        f"Enter ticker symbol (e.g. {TICKER_INPUT_EXAMPLES}) [{fallback}]:",
         validate=lambda x: (
             is_valid_ticker_input(x)
             or "Please enter a valid ticker symbol, e.g. AAPL, 000404.SZ, 0700.HK, GC=F."
@@ -59,7 +120,7 @@ def get_ticker() -> str:
         console.print("\n[red]No ticker symbol provided. Exiting...[/red]")
         exit(1)
 
-    return normalize_ticker_symbol(ticker) if ticker.strip() else "SPY"
+    return normalize_ticker_symbol(ticker) if ticker.strip() else fallback
 
 
 def normalize_ticker_symbol(ticker: str) -> str:
@@ -99,49 +160,31 @@ def filter_analysts_for_asset_type(
     ]
 
 
-def get_analysis_date() -> str:
-    """Prompt the user to enter a date in YYYY-MM-DD format."""
-    import re
-    from datetime import datetime
+def select_analysts(
+    asset_type: AssetType = AssetType.STOCK,
+    preselected: list[AnalystType] | None = None,
+) -> list[AnalystType]:
+    """Select analysts using an interactive checkbox.
 
-    def validate_date(date_str: str) -> bool:
-        if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_str):
-            return False
-        try:
-            datetime.strptime(date_str, "%Y-%m-%d")
-            return True
-        except ValueError:
-            return False
-
-    date = questionary.text(
-        "Enter the analysis date (YYYY-MM-DD):",
-        validate=lambda x: validate_date(x.strip())
-        or "Please enter a valid date in YYYY-MM-DD format.",
-        style=questionary.Style(
-            [
-                ("text", "fg:green"),
-                ("highlighted", "noinherit"),
-            ]
-        ),
-    ).ask()
-
-    if not date:
-        console.print("\n[red]No date provided. Exiting...[/red]")
-        exit(1)
-
-    return date.strip()
-
-
-def select_analysts(asset_type: AssetType = AssetType.STOCK) -> list[AnalystType]:
-    """Select analysts using an interactive checkbox."""
+    ``preselected`` (e.g. the saved selection from the last run) arrives
+    pre-checked so plain Enter repeats it; with no history every analyst
+    starts checked, so Enter means "the full team" instead of a validation
+    error.
+    """
     available_analysts = filter_analysts_for_asset_type(
         [value for _, value in ANALYST_ORDER],
         asset_type,
     )
+    if asset_type == AssetType.CRYPTO:
+        console.print(
+            "[dim]Fundamentals analyst is unavailable for crypto assets "
+            "(no financial statements to analyze).[/dim]"
+        )
+    checked = set(preselected) if preselected else set(available_analysts)
     choices = questionary.checkbox(
         "Select Your [Analysts Team]:",
         choices=[
-            questionary.Choice(display, value=value)
+            questionary.Choice(display, value=value, checked=value in checked)
             for display, value in ANALYST_ORDER
             if value in available_analysts
         ],
@@ -164,7 +207,7 @@ def select_analysts(asset_type: AssetType = AssetType.STOCK) -> list[AnalystType
     return choices
 
 
-def select_research_depth() -> int:
+def select_research_depth(default: int | None = None) -> int:
     """Select research depth using an interactive selection."""
 
     # Define research depth options with their corresponding values
@@ -179,6 +222,7 @@ def select_research_depth() -> int:
         choices=[
             questionary.Choice(display, value=value) for display, value in DEPTH_OPTIONS
         ],
+        default=default if default in {value for _, value in DEPTH_OPTIONS} else None,
         instruction="\n- Use arrow keys to navigate\n- Press Enter to select",
         style=questionary.Style(
             [
@@ -289,7 +333,7 @@ def _prompt_custom_model_id() -> str:
     return _require_text("Enter model ID:", "Please enter a model ID.")
 
 
-def _select_model(provider: str, mode: str) -> str:
+def _select_model(provider: str, mode: str, default: str | None = None) -> str:
     """Select a model for the given provider and mode (quick/deep)."""
     if provider.lower() == "openrouter":
         return select_openrouter_model(mode)
@@ -300,12 +344,14 @@ def _select_model(provider: str, mode: str) -> str:
             "Please enter a deployment name.",
         )
 
+    options = get_model_options(provider, mode)
+    option_values = {value for _, value in options}
     choice = questionary.select(
         f"Select Your [{mode.title()}-Thinking LLM Engine]:",
         choices=[
-            questionary.Choice(display, value=value)
-            for display, value in get_model_options(provider, mode)
+            questionary.Choice(display, value=value) for display, value in options
         ],
+        default=default if default in option_values else None,
         instruction="\n- Use arrow keys to navigate\n- Press Enter to select",
         style=questionary.Style(
             [
@@ -326,14 +372,14 @@ def _select_model(provider: str, mode: str) -> str:
     return choice
 
 
-def select_shallow_thinking_agent(provider) -> str:
+def select_shallow_thinking_agent(provider, default: str | None = None) -> str:
     """Select shallow thinking llm engine using an interactive selection."""
-    return _select_model(provider, "quick")
+    return _select_model(provider, "quick", default)
 
 
-def select_deep_thinking_agent(provider) -> str:
+def select_deep_thinking_agent(provider, default: str | None = None) -> str:
     """Select deep thinking llm engine using an interactive selection."""
-    return _select_model(provider, "deep")
+    return _select_model(provider, "deep", default)
 
 def _llm_provider_table() -> list[tuple[str, str, str | None]]:
     """(display_name, provider_key, base_url) for every supported provider.
@@ -352,7 +398,9 @@ def _llm_provider_table() -> list[tuple[str, str, str | None]]:
         ("xAI", "xai", "https://api.x.ai/v1"),
         ("DeepSeek", "deepseek", "https://api.deepseek.com"),
         ("Qwen", "qwen", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
-        ("GLM", "glm", "https://open.bigmodel.cn/api/paas/v4/"),
+        # International Z.AI endpoint, matching ZHIPU_API_KEY — the BigModel
+        # (China) endpoint is the glm-cn region, keyed by ZHIPU_CN_API_KEY.
+        ("GLM", "glm", "https://api.z.ai/api/paas/v4/"),
         ("MiniMax", "minimax", "https://api.minimax.io/v1"),
         ("OpenRouter", "openrouter", "https://openrouter.ai/api/v1"),
         ("Mistral", "mistral", "https://api.mistral.ai/v1"),
@@ -366,13 +414,31 @@ def _llm_provider_table() -> list[tuple[str, str, str | None]]:
     ]
 
 
+# China-region endpoints. These providers are picked via the region sub-prompt
+# rather than the main menu, but a user pinning e.g. TRADINGAGENTS_LLM_PROVIDER
+# =qwen-cn (or replaying saved settings) still needs the endpoint to resolve.
+_REGIONAL_PROVIDER_URLS = {
+    "qwen-cn": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "glm-cn": "https://open.bigmodel.cn/api/paas/v4/",
+    "minimax-cn": "https://api.minimaxi.com/v1",
+}
+
+
 def provider_default_url(provider_key: str) -> str | None:
     """Return the default backend URL for a provider key, or None if unknown."""
     key = provider_key.lower()
+    regional = _REGIONAL_PROVIDER_URLS.get(key)
+    if regional:
+        return regional
     for _, pk, url in _llm_provider_table():
         if pk == key:
             return url
     return None
+
+
+def known_provider_keys() -> list[str]:
+    """Every provider key the CLI can configure, including regional variants."""
+    return [pk for _, pk, _ in _llm_provider_table()] + sorted(_REGIONAL_PROVIDER_URLS)
 
 
 def resolve_backend_url(
@@ -388,11 +454,12 @@ def resolve_backend_url(
     return env_url or menu_url or provider_default_url(provider)
 
 
-def prompt_openai_compatible_url() -> str:
+def prompt_openai_compatible_url(default: str | None = None) -> str:
     """Prompt for a custom OpenAI-compatible endpoint base URL."""
     url = questionary.text(
         "Enter the OpenAI-compatible base URL "
         "(e.g. http://localhost:8000/v1 for vLLM, http://localhost:1234/v1 for LM Studio):",
+        default=default or "",
         validate=lambda x: x.strip().startswith(("http://", "https://"))
         or "Enter a URL starting with http:// or https://",
     ).ask()
@@ -402,9 +469,20 @@ def prompt_openai_compatible_url() -> str:
     return url.strip()
 
 
-def select_llm_provider() -> tuple[str, str | None]:
-    """Select the LLM provider and its API endpoint."""
+def select_llm_provider(default: str | None = None) -> tuple[str, str | None]:
+    """Select the LLM provider and its API endpoint.
+
+    ``default`` (a provider key, e.g. from saved settings) sets the initial
+    pointer position; regional keys map back to their base menu row.
+    """
     PROVIDERS = _llm_provider_table()
+
+    # Saved regional keys (qwen-cn, ...) aren't menu rows; highlight the base
+    # provider whose region sub-prompt produced them.
+    default_key = (default or "").lower().removesuffix("-cn")
+    default_choice = next(
+        ((pk, url) for _, pk, url in PROVIDERS if pk == default_key), None
+    )
 
     choice = questionary.select(
         "Select your LLM Provider:",
@@ -412,6 +490,7 @@ def select_llm_provider() -> tuple[str, str | None]:
             questionary.Choice(display, value=(provider_key, url))
             for display, provider_key, url in PROVIDERS
         ],
+        default=default_choice,
         instruction="\n- Use arrow keys to navigate\n- Press Enter to select",
         style=questionary.Style(
             [
@@ -600,13 +679,17 @@ def confirm_ollama_endpoint(url: str) -> None:
         )
 
 
-def ensure_api_key(provider: str) -> str | None:
+def ensure_api_key(provider: str, interactive: bool = True) -> str | None:
     """Make sure the API key for `provider` is available in the environment.
 
     If the env var is already set, returns its value untouched. Otherwise
     interactively prompts the user, persists the value to the project's
     .env file via python-dotenv's set_key (creating .env if needed), and
     exports it into os.environ so the current process picks it up.
+
+    With ``interactive=False`` (a --yes run, or a non-TTY stdin — the caller
+    decides), a missing required key exits immediately with a clear message
+    instead of prompting — failing before the run burns any tokens.
 
     Returns None for providers that do not require a key (e.g. ollama)
     and for providers not found in the canonical mapping.
@@ -625,6 +708,13 @@ def ensure_api_key(provider: str) -> str | None:
     existing = os.environ.get(env_var)
     if existing:
         return existing
+
+    if not interactive:
+        console.print(
+            f"[red]{env_var} is not set. Export it or add it to your .env "
+            f"file, then re-run.[/red]"
+        )
+        raise SystemExit(1)
 
     console.print(
         f"\n[yellow]{env_var} is not set in your environment.[/yellow]"
@@ -650,10 +740,15 @@ def ensure_api_key(provider: str) -> str | None:
     return key
 
 
-def ask_output_language() -> str:
+def ask_output_language(default: str | None = None) -> str:
     """Ask for report output language."""
+    language_values = {
+        "English", "Chinese", "Japanese", "Korean", "Hindi", "Spanish",
+        "Portuguese", "French", "German", "Arabic", "Russian",
+    }
     choice = questionary.select(
         "Select Output Language:",
+        default=default if default in language_values else None,
         choices=[
             questionary.Choice("English (default)", "English"),
             questionary.Choice("Chinese (中文)", "Chinese"),

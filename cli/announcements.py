@@ -1,4 +1,5 @@
 import getpass
+import sys
 
 import requests
 from rich.console import Console
@@ -46,7 +47,9 @@ def display_announcements(console: Console, data: dict) -> None:
     )
     console.print(panel)
 
-    if require_attention:
+    # Never block a scripted run on "Press Enter" — the pause is only
+    # meaningful when a human is at the keyboard.
+    if require_attention and sys.stdin.isatty():
         getpass.getpass("Press Enter to continue...")
     else:
         console.print()

@@ -3,9 +3,10 @@
 import json
 import logging
 import os
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import yfinance as yf
 from langgraph.prebuilt import ToolNode
@@ -42,6 +43,18 @@ from .setup import GraphSetup
 from .signal_processing import SignalProcessor
 
 logger = logging.getLogger(__name__)
+
+
+class CheckpointSession(NamedTuple):
+    """What a checkpointed run needs from the caller side.
+
+    ``config_patch`` merges into the graph kwargs' ``config`` (the thread id
+    that keys the resume); ``resume_step`` is the step being resumed from, or
+    None on a fresh start — surfaced so the CLI can tell the user.
+    """
+
+    config_patch: dict
+    resume_step: int | None
 
 
 def _coerce_max_retries(value):
@@ -148,7 +161,6 @@ class TradingAgentsGraph:
         # Set up the graph: keep the workflow for recompilation with a checkpointer.
         self.workflow = self.graph_setup.setup_graph(selected_analysts)
         self.graph = self.workflow.compile()
-        self._checkpointer_ctx = None
 
     def _get_provider_kwargs(self) -> dict[str, Any]:
         """Get provider-specific kwargs for LLM client creation."""
@@ -374,32 +386,56 @@ class TradingAgentsGraph:
         # Resolve any pending memory-log entries for this ticker before the pipeline runs.
         self._resolve_pending_entries(company_name)
 
-        # Recompile with a checkpointer if the user opted in.
-        if self.config.get("checkpoint_enabled"):
-            self._checkpointer_ctx = get_checkpointer(
-                self.config["data_cache_dir"], company_name
-            )
-            saver = self._checkpointer_ctx.__enter__()
-            self.graph = self.workflow.compile(checkpointer=saver)
+        with self.checkpointed_run(company_name, trade_date, asset_type):
+            return self._run_graph(company_name, trade_date, asset_type=asset_type)
 
-            step = checkpoint_step(
+    @contextmanager
+    def checkpointed_run(self, company_name, trade_date, asset_type: str = "stock"):
+        """Attach the per-ticker checkpointer around a run and restore after.
+
+        Shared by ``propagate()`` and callers that stream ``self.graph``
+        directly (the CLI's live display): both need the graph recompiled with
+        a SqliteSaver for the duration of the run, and the stateless graph
+        restored afterwards. Yields a :class:`CheckpointSession` — callers
+        driving their own stream merge ``session.config_patch`` into the graph
+        kwargs' ``config`` (``_run_graph`` derives the same thread id itself).
+
+        No-op (empty session) when ``checkpoint_enabled`` is off.
+        """
+        if not self.config.get("checkpoint_enabled"):
+            yield CheckpointSession(config_patch={}, resume_step=None)
+            return
+
+        signature = self._run_signature(asset_type)
+        with get_checkpointer(self.config["data_cache_dir"], company_name) as saver:
+            self.graph = self.workflow.compile(checkpointer=saver)
+            try:
+                step = checkpoint_step(
+                    self.config["data_cache_dir"], company_name, str(trade_date),
+                    signature,
+                )
+                if step is not None:
+                    logger.info(
+                        "Resuming from step %d for %s on %s",
+                        step, company_name, trade_date,
+                    )
+                else:
+                    logger.info("Starting fresh for %s on %s", company_name, trade_date)
+                tid = thread_id(company_name, str(trade_date), signature)
+                yield CheckpointSession(
+                    config_patch={"configurable": {"thread_id": tid}},
+                    resume_step=step,
+                )
+            finally:
+                self.graph = self.workflow.compile()
+
+    def clear_run_checkpoint(self, company_name, trade_date, asset_type: str = "stock"):
+        """Drop the saved checkpoint after a successful run (CLI stream path)."""
+        if self.config.get("checkpoint_enabled"):
+            clear_checkpoint(
                 self.config["data_cache_dir"], company_name, str(trade_date),
                 self._run_signature(asset_type),
             )
-            if step is not None:
-                logger.info(
-                    "Resuming from step %d for %s on %s", step, company_name, trade_date
-                )
-            else:
-                logger.info("Starting fresh for %s on %s", company_name, trade_date)
-
-        try:
-            return self._run_graph(company_name, trade_date, asset_type=asset_type)
-        finally:
-            if self._checkpointer_ctx is not None:
-                self._checkpointer_ctx.__exit__(None, None, None)
-                self._checkpointer_ctx = None
-                self.graph = self.workflow.compile()
 
     def save_reports(self, final_state, ticker, save_path=None) -> Path:
         """Write the markdown report tree for a completed run, like the CLI does.
@@ -432,15 +468,25 @@ class TradingAgentsGraph:
         args = self.propagator.get_graph_args()
 
         # Inject thread_id so same ticker+date+graph-shape resumes; a different
-        # date or graph shape starts fresh (#1089).
+        # date or graph shape starts fresh (#1089). LangGraph resumes a
+        # checkpointed thread only when the input is None — passing state
+        # restarts from the entry point and appends duplicate messages onto
+        # the thread's persisted history — so switch the input on resume.
+        graph_input = init_agent_state
         if self.config.get("checkpoint_enabled"):
-            tid = thread_id(company_name, str(trade_date), self._run_signature(asset_type))
+            signature = self._run_signature(asset_type)
+            tid = thread_id(company_name, str(trade_date), signature)
             args.setdefault("config", {}).setdefault("configurable", {})["thread_id"] = tid
+            has_resume = checkpoint_step(
+                self.config["data_cache_dir"], company_name, str(trade_date), signature
+            ) is not None
+            if has_resume:
+                graph_input = None
 
         if self.debug:
             trace = []
             last_printed = None
-            for chunk in self.graph.stream(init_agent_state, **args):
+            for chunk in self.graph.stream(graph_input, **args):
                 if chunk["messages"]:
                     msg = chunk["messages"][-1]
                     # Nodes after the trader don't append to messages, so the
@@ -457,7 +503,7 @@ class TradingAgentsGraph:
             for chunk in trace:
                 final_state.update(chunk)
         else:
-            final_state = self.graph.invoke(init_agent_state, **args)
+            final_state = self.graph.invoke(graph_input, **args)
 
         # Store current state for reflection.
         self.curr_state = final_state

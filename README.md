@@ -28,6 +28,7 @@
 # TradingAgents: Multi-Agents LLM Financial Trading Framework
 
 ## News
+- [2026-07] **TradingAgents v0.4.0** released: the CLI now remembers your settings and reuses them with one keystroke, takes flags for every selection (`tradingagents analyze NVDA -d 2026-07-04 --yes` runs with zero prompts), prints a stable `FINAL DECISION` line for scripting, adds `doctor` preflight and `config` commands, and fixes `--checkpoint` on the CLI path. See [CHANGELOG.md](CHANGELOG.md).
 - [2026-07] **TradingAgents v0.3.1** released with correctness and stability fixes: Alpha Vantage look-ahead filtering, graph-router crash-safety, graph-shape-aware checkpoint resume, working crypto sentiment sources, a configurable LLM retry budget, Bedrock API-key auth, and Claude Sonnet 5 / Fable 5 support. See [CHANGELOG.md](CHANGELOG.md) for the full list.
 - [2026-06] **TradingAgents v0.3.0** released with a verified data-access contract, an expanded provider registry (NVIDIA, Kimi, Groq, Mistral, Bedrock, and any OpenAI-compatible endpoint), FRED and Polymarket data vendors, a current-generation model catalog, and a CI gate.
 - [2026-05] **TradingAgents v0.2.5** released with the grounded Sentiment Analyst, GPT-5.5 etc. model coverage, Qwen/GLM/MiniMax dual-region support, `TRADINGAGENTS_*` env-var configurability with API-key auto-detection, remote Ollama support, non-US alpha benchmarks, and ticker path-traversal hardening.
@@ -175,7 +176,23 @@ Launch the interactive CLI:
 tradingagents          # installed command
 python -m cli.main     # alternative: run directly from source
 ```
-You will see a screen where you can select your desired tickers, analysis date, LLM provider, research depth, and more.
+You will see a screen where you can select your desired tickers, analysis date, LLM provider, research depth, and more. After the first run the CLI remembers those choices and offers them back as a one-keystroke fast path — a repeat analysis is just: ticker, date, Enter.
+
+Anything can also be answered on the command line, up to fully unattended runs:
+```bash
+tradingagents analyze NVDA                          # prompts only for what's missing
+tradingagents analyze NVDA -d 2026-07-04 --yes      # zero prompts
+tradingagents analyze 0700.HK -a market,news --depth medium --lang Korean --yes
+tradingagents analyze BTC-USD --yes --no-save-report --no-show-report
+```
+With `--yes`, every unanswered choice resolves from `TRADINGAGENTS_*` env vars, then your saved settings, then the defaults; a missing API key fails fast instead of prompting, the report is saved without asking (`--report-path` to choose where, `--no-save-report` to skip), and the last line prints a stable `FINAL DECISION: <signal>` for scripts. Exit codes: 0 success, 1 run or report-save failure (130 on Ctrl-C), 2 invalid flags/settings or completed without a decision.
+
+Two helper commands round out the workflow:
+```bash
+tradingagents doctor [TICKER]   # preflight: keys, endpoints, data vendors, ticker resolution — no LLM cost
+tradingagents config show       # saved settings + the env overrides that beat them
+tradingagents config reset      # forget saved settings
+```
 
 ### Markets and tickers
 
@@ -243,7 +260,11 @@ See `tradingagents/default_config.py` for all configuration options.
 
 ## Persistence and Recovery
 
-TradingAgents persists two kinds of state across runs.
+TradingAgents persists three kinds of state across runs.
+
+### Saved CLI settings
+
+After each interactive run the CLI saves your non-per-run choices — analysts, research depth, provider, models, effort level, output language, and the last ticker — to `~/.tradingagents/settings.json` (override the path with `TRADINGAGENTS_SETTINGS_PATH`, opt out with `TRADINGAGENTS_NO_SAVE_SETTINGS`). The next run offers them back as a single confirmation, pre-fills every prompt if you choose to customize, and replays them for `tradingagents analyze --yes`. Precedence is always: CLI flags > `TRADINGAGENTS_*` env vars > saved settings > built-in defaults. Manage the file with `tradingagents config show|path|reset`.
 
 ### Decision log
 

@@ -6,6 +6,105 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.4.0] — 2026-07-07
+
+One-command usability release: the CLI remembers your choices and replays
+them with a single keystroke (or zero prompts with `--yes`), takes flags for
+every selection, adds `doctor`/`config` commands — and `--checkpoint` now
+actually works on the CLI path.
+
+### Added
+
+- **Saved run settings.** After each interactive run the CLI persists the
+  non-per-run choices (analysts, depth, provider, models, effort, language,
+  last ticker) to `~/.tradingagents/settings.json` (path override:
+  `TRADINGAGENTS_SETTINGS_PATH`; opt out: `TRADINGAGENTS_NO_SAVE_SETTINGS`).
+  The next run shows a source-annotated summary and reuses everything with
+  one Enter; choosing "customize" pre-fills every prompt (provider pointer,
+  pre-checked analyst boxes, model/depth/language defaults, last ticker)
+  with the saved values. Corrupt or hand-edited files degrade field-by-field
+  instead of crashing the CLI.
+- **`analyze` flags for every selection.** `tradingagents analyze NVDA
+  --date 2026-07-04 --analysts market,news --depth medium --provider
+  anthropic --quick-llm ... --deep-llm ... --backend-url ... --lang Korean`.
+  Each flag answers its wizard step; anything omitted is prompted for.
+  Invalid values (bad ticker charset, future date, unknown analyst/provider,
+  depth outside 1/3/5) fail at parse time with exit code 2, before any
+  prompt or API call. Precedence: CLI flag > `TRADINGAGENTS_*` env var >
+  saved settings > built-in default — with one legacy exception: round
+  counts pinned via `TRADINGAGENTS_MAX_DEBATE_ROUNDS` /
+  `TRADINGAGENTS_MAX_RISK_ROUNDS` still beat `--depth`, preserving the
+  established env contract (#977).
+- **Non-interactive mode.** `--yes` / `-y` answers everything from that same
+  chain with zero prompts, and the post-run behavior stops blocking:
+  `--save-report/--no-save-report`, `--report-path`, and
+  `--show-report/--no-show-report` replace the two historical prompts
+  (scripted runs default to save-quietly, don't page). A missing API key
+  exits immediately with the env-var name instead of opening a hidden
+  password prompt, the startup announcements fetch is skipped
+  (`TRADINGAGENTS_NO_ANNOUNCEMENTS` opts out everywhere), and a stable
+  `FINAL DECISION: <signal>` line is printed for scripts — the same
+  processed signal `propagate()` returns to programmatic callers. Exit
+  codes: 0 success, 1 failure (130 on Ctrl-C), 2 completed without a
+  decision.
+- **`tradingagents doctor [TICKER]`.** Free preflight: effective
+  provider/models and where they came from, API-key presence (plus Azure's
+  extra env vars and the Bedrock credential chain), reachability probe for
+  local Ollama/OpenAI-compatible endpoints, Alpha Vantage/FRED data-vendor
+  keys, results-dir writability, and optional ticker-identity resolution —
+  no LLM calls, so a broken setup is caught before it burns tokens.
+- **`tradingagents config show|path|reset`.** Inspect the saved settings
+  (with any active env overrides that beat them), print the file path, or
+  start fresh.
+- **First-run polish.** Analyst checkboxes start checked (Enter = full
+  team), the empty-ticker default is the last-used ticker instead of always
+  SPY, weekend dates get a "markets are closed" note, and crypto runs
+  explain why the fundamentals analyst is unavailable instead of silently
+  hiding it.
+
+### Fixed
+
+- **`tradingagents analyze` now parses.** The app was a collapsed
+  single-command Typer app, so the long-documented `tradingagents analyze
+  --checkpoint` form actually errored with "Got unexpected extra argument
+  (analyze)". The CLI now has real `analyze` / `doctor` / `config`
+  subcommands; bare `tradingagents` still launches the wizard and the
+  root-level `--checkpoint` / `--clear-checkpoints` flags keep working.
+- **`--checkpoint` engaged nothing on the CLI path.** Only `propagate()`
+  recompiled the graph with a checkpointer; the CLI streams the graph
+  directly, so no checkpoint was ever written and the advertised resume
+  never happened. Both paths now share one `checkpointed_run()` session
+  that attaches the per-ticker saver, threads the resume ID into the
+  stream, surfaces "Resuming from step N" in the live display, and clears
+  the checkpoint on success. Resume also now actually resumes: LangGraph
+  continues a checkpointed thread only when the input is `None`, and both
+  the CLI stream and `_run_graph` previously re-sent the initial state —
+  restarting from the entry point and re-spending every completed node.
+- **Mid-run failures explain themselves.** Ctrl-C or a mid-stream exception
+  used to tear down the live display into a bare traceback. The CLI now
+  reports which agent it stopped at, points at the per-section reports
+  already saved under `results_dir`, and reminds you that `--checkpoint`
+  makes the run resumable.
+- **Regional provider endpoints resolve outside the menus.** The China
+  endpoints existed only inside the interactive region prompts, so pinning
+  `TRADINGAGENTS_LLM_PROVIDER=qwen-cn` (or replaying saved settings)
+  resolved no backend URL; `qwen-cn` / `glm-cn` / `minimax-cn` now resolve
+  their endpoints everywhere. Also `glm`'s default endpoint now matches its
+  key: it pointed the international `ZHIPU_API_KEY` at the BigModel China
+  URL; it now defaults to Z.AI, with BigModel under `glm-cn`. Breaking for
+  setups that deliberately paired `TRADINGAGENTS_LLM_PROVIDER=glm` with a
+  BigModel account: switch to `glm-cn` (key: `ZHIPU_CN_API_KEY`).
+- **A server-set "Press Enter to continue" can no longer hang scripts.**
+  The announcements banner only blocks for attention on a real TTY.
+
+### Changed
+
+- The post-run "Save report?" and "Display full report?" prompts appear
+  only on an interactive terminal with no deciding flag; scripted runs save
+  to the default path and skip the on-screen report. The completion summary
+  now always prints the live section-report directory and the extracted
+  final decision.
+
 ## [0.3.1] — 2026-07-05
 
 Correctness and stability patch: data look-ahead, graph-router crash-safety,

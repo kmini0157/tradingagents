@@ -56,6 +56,13 @@ actually works on the CLI path.
 - **`tradingagents config show|path|reset`.** Inspect the saved settings
   (with any active env overrides that beat them), print the file path, or
   start fresh.
+- **`tradingagents desktop`.** One command puts a double-clickable app icon
+  on the desktop: a `.lnk` shortcut on Windows (created via PowerShell, no
+  extra dependencies; the console stays open after the run), a
+  Terminal-launching `.app` bundle on macOS, and an XDG `.desktop` launcher
+  on Linux (desktop + app menu) — all with a bundled candlestick icon. The
+  launcher targets the installed console script and falls back to
+  `python -m cli.main` for source checkouts.
 - **First-run polish.** Analyst checkboxes start checked (Enter = full
   team), the empty-ticker default is the last-used ticker instead of always
   SPY, weekend dates get a "markets are closed" note, and crypto runs

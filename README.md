@@ -194,6 +194,14 @@ tradingagents config show       # saved settings + the env overrides that beat t
 tradingagents config reset      # forget saved settings
 ```
 
+### Desktop app
+
+Put a double-clickable TradingAgents icon on your desktop:
+```bash
+tradingagents desktop
+```
+This creates a Windows shortcut (`.lnk`, the console stays open after the run so the report remains readable), a macOS app bundle (`.app`), or a Linux `.desktop` launcher (desktop and app menu). Double-clicking opens the interactive wizard in a terminal window — combined with saved settings, a repeat analysis is a double-click and a few Enters. Re-run the command any time to refresh the launcher (e.g. after moving the install).
+
 ### Markets and tickers
 
 TradingAgents works with any market Yahoo Finance covers, using the exchange-suffixed ticker. Company identity and the alpha benchmark resolve automatically per market.

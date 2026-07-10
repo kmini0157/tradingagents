@@ -2129,6 +2129,28 @@ def doctor(
     raise typer.Exit(run_doctor(ticker))
 
 
+@app.command()
+def desktop():
+    """Put a double-clickable TradingAgents app icon on your desktop.
+
+    Creates a shortcut (.lnk) on Windows, an app bundle (.app) on macOS, or
+    an XDG launcher (.desktop, also added to the app menu) on Linux. Double-
+    clicking it opens the interactive wizard in a terminal window.
+    """
+    from cli.desktop import DesktopError, create_desktop_launcher
+
+    try:
+        path = create_desktop_launcher()
+    except DesktopError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from None
+    console.print(f"[green]✓ Desktop app created:[/green] {path}")
+    console.print(
+        "[dim]Double-click it to launch TradingAgents. Re-run this command any "
+        "time to refresh the launcher (e.g. after moving the install).[/dim]"
+    )
+
+
 config_app = typer.Typer(help="Inspect or reset the saved CLI settings.")
 app.add_typer(config_app, name="config")
 
